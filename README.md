@@ -1,0 +1,164 @@
+# mcu-can
+
+<p align="center">
+  <img alt="platform: ESP-IDF | STM32 HAL" src="https://img.shields.io/badge/platform-ESP--IDF%20%7C%20STM32%20HAL-70e1b2?style=flat-square&labelColor=0d2238">
+  <img alt="language: C" src="https://img.shields.io/badge/language-C-70e1b2?style=flat-square&labelColor=0d2238">
+  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-f2bd68?style=flat-square&labelColor=0d2238">
+</p>
+
+A small C library for Classic CAN controllers on **ESP-IDF 5.2+** and the
+**STM32 HAL**. The MCP2515, the ESP32's TWAI and the STM32's bxCAN each keep
+a handle API and hand out a `struct can_dev`: frames out and in, acceptance
+filters, the operating mode, error counters and the bus state, the same
+whichever controller carries them. This library replaces
+`esp-mcp2515-can`, whose `mcp2515.h` it keeps call for call; the STM32
+port, the TWAI and bxCAN drivers and the category view are new.
+
+`esp-sn65hvd230-can` stays as it is, and links next to this library: no
+header, type, macro, file or global symbol is shared. **One owner per
+controller**: drive a TWAI with one of them, not both.
+
+The repository is named `mcu-can`; the C API, `CONFIG_CAN_*` options and
+forge package key are `can`. The clone command below names the ESP-IDF
+component directory `can` as well.
+
+> **Hardware unverified.** Host tests use a simulated MCP2515, simulated
+> ESP-IDF and HAL drivers, and platform stubs. Nothing here has run on a
+> physical bus.
+
+[Supported hardware](#supported-hardware) · [Install](#install) ·
+[Quick start](#quick-start) · [Examples](#examples) ·
+[Documentation](#documentation) · [Tests](#tests) · [License](#license)
+
+## Supported hardware
+
+| Controller | Platform | Interface | Notes |
+|---|---|---|---|
+| **MCP2515** | both | SPI, mode 0,0 or 1,1, up to 10 MHz | 8 or 16 MHz crystal; 125k, 250k, 500k, and 1M with 16 MHz |
+| **TWAI** | ESP-IDF | on-chip, legacy `driver/twai.h` | every controller of the part; 25k to 1M; optional SN65HVD230 Rs pin |
+| **bxCAN** | STM32 HAL | on-chip, the HAL's CAN module | timing, filters and mode set by the app's `HAL_CAN_Init()` |
+
+One Kconfig option per controller: `CAN_MCP2515`, `CAN_TWAI`, `CAN_BXCAN`.
+Wiring is in the [wiring guide](docs/hardware.md).
+
+## Install
+
+### ESP-IDF
+
+```sh
+git clone https://github.com/JonasAtelier/mcu-can components/can
+```
+
+```ini
+CONFIG_CAN=y
+CONFIG_CAN_MCP2515=y
+```
+
+Other components declare `REQUIRES can driver`.
+
+### esp-forge / stm-forge
+
+```make
+can_GIT=https://github.com/JonasAtelier/mcu-can@stable
+```
+
+```make
+PKG_can             = y
+CAN_MCP2515         = y
+```
+
+stm-forge must be at `ee921c3` or later. See the
+[installation guide](docs/installation.md). **No chip driver is enabled by
+default.**
+
+## Quick start
+
+On ESP-IDF, the MCP2515 exactly as esp-mcp2515-can:
+
+```c
+#include "mcp2515.h"
+
+mcp2515_config_t cfg = {
+    .host = SPI2_HOST, .cs_gpio = 10, .int_gpio = 9,
+    .crystal_hz = 8000000, .bitrate = 500000,
+};
+mcp2515_handle_t chip;
+mcp2515_frame_t f = { .id = 0x123, .len = 2, .data = { 1, 2 } };
+
+ESP_ERROR_CHECK(mcp2515_init(&cfg, &chip));
+mcp2515_send(chip, &f, 10);
+```
+
+The same through the category, with any of the three:
+
+```c
+struct can_dev *can = mcp2515_can(chip);    /* or twaican_can(), bxcan_can() */
+struct can_frame rx;
+
+if (can_recv(can, &rx, 100) == 0)
+    can_log_frame(can, &rx);
+```
+
+- On ESP-IDF the chip calls return `esp_err_t`, as esp-mcp2515-can did; on
+  the HAL, **0 or a negative errno**. `can_*` is errno on both.
+- **Mind the crystal.** A wrong `crystal_hz` is a wrong bit rate, and the bus
+  does not say so. Read the can on the crystal.
+- bxCAN takes its timing and filters from the app's CubeMX setup; see
+  [API usage](docs/usage.md#bxcan).
+
+## Examples
+
+| Controller | ESP-IDF | STM32 HAL |
+|---|---|---|
+| MCP2515 | [mcp2515](examples/esp/mcp2515/) (esp-mcp2515-can's) | [mcp2515](examples/stm/mcp2515/main.c) |
+| TWAI | [twai](examples/esp/twai/), the category view and bus-off recovery | -- |
+| both | [dual](examples/esp/dual/), a TWAI-to-MCP2515 bridge through the category | -- |
+| bxCAN | -- | [bxcan](examples/stm/bxcan/main.c), FIFO 0 interrupt to `bxcan_irq()` |
+
+ESP-IDF examples locate this library through `EXTRA_COMPONENT_DIRS`, which
+assumes the repository is checked out as `can`:
+
+```sh
+cd examples/esp/mcp2515
+idf.py set-target esp32s3 # Replace with your board's target.
+idf.py build
+```
+
+STM32 examples are snippets to integrate into your application.
+
+## Scope and limitations
+
+- **Classic CAN only.** No CAN FD, no FDCAN (G0/G4/H7).
+- **bxCAN: no bit timing, filters, mode or recovery from this library.**
+  Their register layout is in ST's reference manual, which this library
+  does not have; those calls are `-EOPNOTSUPP` and the app configures them
+  through the HAL.
+- **TWAI: filter, mode and bit rate only while stopped**, the legacy
+  driver's install-time settings. One filter.
+- **MCP2515: up to two filters** through the category, one per receive
+  buffer.
+- **No locks.** One thread per device, or your own mutex.
+
+## Documentation
+
+| Guide | Contents |
+|---|---|
+| [Installation](docs/installation.md) | Forge, ESP-IDF, STM32 HAL, build options, logging, next to esp-sn65hvd230-can |
+| [Hardware](docs/hardware.md) | Transceivers, termination, the MCP2515's pins and crystal, the TWAI's Rs pin, the STM32's CAN pins |
+| [API usage](docs/usage.md) | Handles and the category view, frames, filters, modes, status and recovery, errors, changes from esp-mcp2515-can |
+| [Chip reference](docs/chips.md) | The MCP2515's bit timing, instructions and registers; the TWAI's filter and states; bxCAN's status bits; each cited |
+| [Development](docs/development.md) | Layout, ports, bus abstraction, adding a driver and test coverage |
+
+## Tests
+
+```sh
+make -C test test
+```
+
+Host-only; no toolchain or CAN hardware needed. See the
+[test reference](docs/development.md#tests). Error logs during the suite are
+expected: tests exercise failure paths.
+
+## License
+
+[MIT](LICENSE).
