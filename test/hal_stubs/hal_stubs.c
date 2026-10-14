@@ -7,6 +7,7 @@
 #include "stm32_hal_stub.h"
 
 uint32_t stub_tick;
+FDCAN_Config_TypeDef stub_fdcan_config;
 uint32_t SystemCoreClock = 16000000;	/* an STM32's HSI at reset */
 uint32_t stub_systick_step = 1;
 uint64_t stub_cycles;
