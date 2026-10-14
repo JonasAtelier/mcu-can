@@ -6,6 +6,7 @@ managed_components/
 dependencies.lock
 docs/*.pdf
 test/test_mcp2515_math
+test/test_fdcan_math
 test/test_names
 test/esp/test_core
 test/esp/test_mcp2515
@@ -14,4 +15,5 @@ test/esp/test_port_esp
 test/stm/test_core
 test/stm/test_mcp2515
 test/stm/test_bxcan
+test/stm/test_fdcan
 test/stm/test_port_stm
