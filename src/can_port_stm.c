@@ -15,7 +15,7 @@
  * only when PKG_can = y, so this is the CMakeLists' "CAN on, no chip"
  * warning on the ESP-IDF side. The TWAI is ESP-IDF's, so not counted here.
  */
-#if !(CONFIG_CAN_MCP2515 || CONFIG_CAN_BXCAN)
+#if !(CONFIG_CAN_MCP2515 || CONFIG_CAN_BXCAN || CONFIG_CAN_FDCAN)
 #warning "can: no chip driver is selected; set CAN_<CHIP> = y under PKG_can = y (or -DCONFIG_CAN_<CHIP>=1)"
 #endif
 

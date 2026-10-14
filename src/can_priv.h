@@ -181,6 +181,9 @@ TickType_t can_ticks(uint32_t ms);
 #if !defined(HAL_CAN_MODULE_ENABLED) && CONFIG_CAN_BXCAN
 #error "CAN_BXCAN needs the HAL CAN module: #define HAL_CAN_MODULE_ENABLED in the app's stm32<family>xx_hal_conf.h, with stm32<family>xx_hal_can.c in the build"
 #endif
+#if !defined(HAL_FDCAN_MODULE_ENABLED) && CONFIG_CAN_FDCAN
+#error "CAN_FDCAN needs the HAL FDCAN module: #define HAL_FDCAN_MODULE_ENABLED in the app's stm32<family>xx_hal_conf.h, with stm32<family>xx_hal_fdcan.c in the build"
+#endif
 
 #ifdef HAL_I2C_MODULE_ENABLED
 typedef I2C_HandleTypeDef *can_i2c_bus;

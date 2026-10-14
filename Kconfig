@@ -3,13 +3,13 @@
 # build step: its build only sees the defconfig lines, as
 # -DCONFIG_CAN_<CHIP>=1 or 0. Every chip is off unless set.
 menuconfig CAN
-    bool "Classic CAN subsystem"
+    bool "CAN subsystem (Classic CAN; CAN FD on the FDCAN)"
     default y
     help
-        The CAN core: struct can_dev, can_send() and can_recv(), filters,
-        status, and the can_* log helpers. Pick the controller drivers you
-        need below; none is built by default, so a chip missing from
-        sdkconfig is off.
+        The CAN core: struct can_dev, can_send() and can_recv() and
+        their CAN FD forms, filters, status, and the can_* log helpers.
+        Pick the controller drivers you need below; none is built by
+        default, so a chip missing from sdkconfig is off.
 
 if CAN
 
@@ -36,6 +36,16 @@ if CAN
             Build the bxCAN driver on the HAL's CAN module: bxcan_init()
             and bxcan_can(). Needs HAL_CAN_MODULE_ENABLED and
             stm32<family>xx_hal_can.c in the build. Ignored on ESP-IDF.
+
+    config CAN_FDCAN
+        bool "STM32 FDCAN controller, Classic CAN and CAN FD (STM32 HAL only)"
+        default n
+        help
+            Build the FDCAN driver on the HAL's FDCAN module: fdcan_init(),
+            fdcan_irq() and fdcan_can(), with can_send_fd() and
+            can_recv_fd() for CAN FD frames. Needs HAL_FDCAN_MODULE_ENABLED
+            and stm32<family>xx_hal_fdcan.c in the build. Checked against
+            the STM32H5 HAL. Ignored on ESP-IDF.
 
     config CAN_DEBUG
         bool "can_dbg() lines"
