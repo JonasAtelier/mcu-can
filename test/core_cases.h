@@ -432,6 +432,193 @@ static void test_log(void)
 	       !strstr(stub_log_last, "EF"));
 }
 
+/* ---- CAN FD ---- */
+
+/* A fake FD controller: send_fd records, recv_fd serves fd_queue. */
+static struct canfd_frame fd_queue[8];
+static int fd_queued, fd_served, fd_sends;
+static struct canfd_frame fd_sent;
+static uint32_t data_bitrate_seen;
+
+static int fake_send_fd(struct can_dev *c, const struct canfd_frame *f,
+			uint32_t timeout_ms)
+{
+	(void)c;
+	(void)timeout_ms;
+	fd_sent = *f;
+	fd_sends++;
+	return fake_ret;
+}
+
+static int fake_recv_fd(struct can_dev *c, struct canfd_frame *f,
+			uint32_t timeout_ms)
+{
+	(void)c;
+	recvs++;
+	if (fake_ret)
+		return fake_ret;
+	if (fd_served == fd_queued) {
+		pass_ms(timeout_ms);
+		return -ETIMEDOUT;
+	}
+	pass_ms(3);
+	*f = fd_queue[fd_served++];
+	return 0;
+}
+
+static int fake_set_data_bitrate(struct can_dev *c, uint32_t b)
+{
+	(void)c;
+	data_bitrate_seen = b;
+	return 0;
+}
+
+static const struct can_ops fd_ops = {
+	.send = fake_send,
+	.recv = fake_recv,
+	.get_status = fake_get_status,
+	.set_filters = fake_set_filters,
+	.send_fd = fake_send_fd,
+	.recv_fd = fake_recv_fd,
+	.set_data_bitrate = fake_set_data_bitrate,
+};
+
+static void reset_fd(const struct can_ops *ops)
+{
+	reset(ops);
+	fd_queued = fd_served = fd_sends = 0;
+	memset(&fd_sent, 0, sizeof(fd_sent));
+	memset(&sent, 0, sizeof(sent));
+}
+
+/* The DLC table both ways, against the HAL's DLCtoBytes. */
+static void test_fd_lengths(void)
+{
+	static const uint8_t table[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8,
+					   12, 16, 20, 24, 32, 48, 64 };
+
+	for (int dlc = 0; dlc < 16; dlc++) {
+		assert(canfd_dlc_to_len((uint8_t)dlc) == table[dlc]);
+		assert(canfd_len_to_dlc(table[dlc]) == dlc);
+	}
+	for (int len = 0; len <= 255; len++) {
+		bool listed = false;
+
+		for (int dlc = 0; dlc < 16; dlc++)
+			listed |= table[dlc] == len;
+		if (!listed)
+			assert(canfd_len_to_dlc((uint8_t)len) == -1);
+	}
+	assert(canfd_dlc_to_len(0x1F) == 64);	/* the low four bits */
+}
+
+static void test_send_fd(void)
+{
+	struct canfd_frame f = { .id = 0x123, .len = 12, .fd = true,
+				 .brs = true, .data = { 9 } };
+
+	/* An FD controller gets the frame as it is. */
+	reset_fd(&fd_ops);
+	assert(can_send_fd(&dev, &f, 7) == 0 && fd_sends == 1 && sends == 0);
+	assert(fd_sent.len == 12 && fd_sent.brs && fd_sent.data[0] == 9);
+	fake_ret = -EIO;
+	assert(can_send_fd(&dev, &f, 7) == -EIO);
+	fake_ret = 0;
+
+	/* What no controller takes. */
+	f.len = 13;
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);
+	f.len = 64;
+	f.rtr = true;
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);	/* no FD remote */
+	f.rtr = false;
+	f.id = 0x800;
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);
+	f.ext = true;
+	assert(can_send_fd(&dev, &f, 7) == 0);
+	f.id = 0x20000000;
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);
+	f = (struct canfd_frame){ .id = 1, .len = 9 };
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);	/* Classic, over 8 */
+	f.len = 8;
+	f.brs = true;
+	assert(can_send_fd(&dev, &f, 7) == -EINVAL);	/* BRS needs FD */
+	assert(fd_sends == 3);
+	assert(can_send_fd(NULL, &f, 7) == -EINVAL);
+	assert(can_send_fd(&dev, NULL, 7) == -EINVAL);
+
+	/* A Classic controller: a Classic frame through send, FD refused. */
+	reset_fd(&full_ops);
+	f = (struct canfd_frame){ .id = 0x1FFFFFFF, .ext = true, .len = 3,
+				  .data = { 1, 2, 3 } };
+	assert(can_send_fd(&dev, &f, 9) == 0 && sends == 1);
+	assert(sent.id == 0x1FFFFFFF && sent.ext && sent.dlc == 3 &&
+	       sent.data[2] == 3 && sent_timeout == 9);
+	f = (struct canfd_frame){ .id = 5, .rtr = true, .len = 4 };
+	assert(can_send_fd(&dev, &f, 9) == 0 && sent.rtr && sent.dlc == 4);
+	f.rtr = false;
+	f.fd = true;
+	assert(can_send_fd(&dev, &f, 9) == -EOPNOTSUPP && sends == 2);
+}
+
+static void test_recv_fd(void)
+{
+	struct canfd_frame f;
+	struct can_filter only_7 = { .id = 0x7, .mask = 0x7FF };
+
+	/* An FD controller: FD and Classic frames alike, stamped. */
+	reset_fd(&fd_ops);
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x10, .fd = true,
+						      .brs = true, .len = 64,
+						      .data = { [63] = 0xAB } };
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x11, .len = 2,
+						      .t_us = 42 };
+	assert(can_recv_fd(&dev, &f, 100) == 0);
+	assert(f.fd && f.brs && f.len == 64 && f.data[63] == 0xAB &&
+	       f.t_us == now_us());
+	assert(can_recv_fd(&dev, &f, 100) == 0 && !f.fd && f.t_us == 42);
+	assert(can_recv_fd(&dev, &f, 10) == -ETIMEDOUT);
+
+	/* The software filter applies, and dropped frames cost time. */
+	reset_fd(&fd_ops);
+	assert(can_set_filters(&dev, &only_7, 1) == 0);
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x8, .fd = true };
+	/* The same id in the other format does not pass a standard filter. */
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x7, .ext = true,
+						      .fd = true };
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x7, .fd = true,
+						      .len = 1 };
+	assert(can_recv_fd(&dev, &f, 100) == 0 && f.id == 0x7 && !f.ext);
+	fd_queue[fd_queued++] = (struct canfd_frame){ .id = 0x8, .fd = true };
+	assert(can_recv_fd(&dev, &f, 2) == -ETIMEDOUT);
+	fake_ret = -EIO;
+	assert(can_recv_fd(&dev, &f, 2) == -EIO);
+	fake_ret = 0;
+
+	/* A Classic controller: can_recv()'s frame, fd false. */
+	reset_fd(&full_ops);
+	queue[queued++] = (struct can_frame){ .id = 0x55, .dlc = 3, .rtr = false,
+					      .data = { 4, 5, 6 }, .t_us = 9 };
+	memset(&f, 0xFF, sizeof(f));
+	assert(can_recv_fd(&dev, &f, 100) == 0);
+	assert(f.id == 0x55 && f.len == 3 && !f.fd && !f.brs && !f.esi &&
+	       !f.ext && f.data[2] == 6 && f.data[3] == 0 && f.t_us == 9);
+	assert(can_recv_fd(&dev, &f, 5) == -ETIMEDOUT);
+	assert(can_recv_fd(NULL, &f, 5) == -EINVAL);
+	assert(can_recv_fd(&dev, NULL, 5) == -EINVAL);
+}
+
+static void test_data_bitrate(void)
+{
+	reset_fd(&fd_ops);
+	assert(can_set_data_bitrate(&dev, 0) == -EINVAL);
+	assert(can_set_data_bitrate(&dev, 1000000) == 0 &&
+	       data_bitrate_seen == 1000000);
+	reset_fd(&full_ops);
+	assert(can_set_data_bitrate(&dev, 1000000) == -EOPNOTSUPP);
+	assert(can_set_data_bitrate(NULL, 1000000) == -EINVAL);
+}
+
 static void run_core_cases(void)
 {
 	test_bound();
@@ -445,4 +632,8 @@ static void run_core_cases(void)
 	test_ring();
 	test_elapsed();
 	test_log();
+	test_fd_lengths();
+	test_send_fd();
+	test_recv_fd();
+	test_data_bitrate();
 }

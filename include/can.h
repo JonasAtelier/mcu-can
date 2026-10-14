@@ -14,10 +14,18 @@
  * Every int-returning function returns 0 or a negative errno. An optional
  * op a chip lacks is -EOPNOTSUPP.
  *
- * Names: everything here is can_* / CAN_FRAME_* / CAN_FILTER_* /
- * CAN_LINK_* / CAN_OPMODE_*, none of which esp-sn65hvd230-can's
- * hvd230can.h or the STM32 HAL's stm32xxxx_hal_can.h uses, so all three
- * headers can meet in one file.
+ * CAN FD rides alongside, not instead: struct can_frame stays Classic CAN's,
+ * and a controller that can do FD adds the optional send_fd/recv_fd ops for
+ * struct canfd_frame. can_send_fd() and can_recv_fd() work on every
+ * controller -- on a Classic one they carry Classic frames and refuse FD
+ * ones -- so an app can use the FD calls throughout.
+ *
+ * Names: everything here is can_* / canfd_* / CAN_FRAME_* / CANFD_FRAME_* /
+ * CAN_FILTER_* / CAN_LINK_* / CAN_OPMODE_*, none of which esp-sn65hvd230-
+ * can's hvd230can.h or the STM32 HAL's stm32xxxx_hal_can.h and
+ * stm32xxxx_hal_fdcan.h uses, so all of those headers can meet in one
+ * file. struct canfd_frame shares its name with Linux's <linux/can.h>:
+ * do not include both in one translation unit.
  */
 #ifndef CAN_H
 #define CAN_H
@@ -34,6 +42,9 @@ extern "C" {
 #define CAN_FRAME_STD_ID_MAX	0x7FFu		/* 11-bit identifier */
 #define CAN_FRAME_EXT_ID_MAX	0x1FFFFFFFu	/* 29-bit identifier */
 
+/* CAN FD: up to 64 bytes, in the lengths canfd_dlc_to_len() lists. */
+#define CANFD_FRAME_DATA_MAX	64
+
 /* The most filters can_set_filters() takes, of any chip here. */
 #define CAN_FILTER_MAX		2
 
@@ -45,6 +56,46 @@ struct can_frame {
 	uint8_t data[CAN_FRAME_DATA_MAX];
 	int64_t t_us;		/* received: can_time_us() then; ignored on send */
 };
+
+/*
+ * A CAN FD frame, or a Classic one carried by the FD calls (fd false).
+ * len is the data length in bytes, not the DLC code: 0..8 for Classic,
+ * and for FD one of 0..8, 12, 16, 20, 24, 32, 48, 64.
+ */
+struct canfd_frame {
+	uint32_t id;		/* up to CAN_FRAME_STD_ID_MAX or _EXT_ID_MAX */
+	uint8_t len;
+	bool ext;		/* 29-bit identifier */
+	bool rtr;		/* remote frame: Classic only */
+	bool fd;		/* FD format; false: a Classic frame */
+	bool brs;		/* FD: the data phase at the data bit rate */
+	bool esi;		/* FD, received: the sender was error passive;
+				 * ignored on send */
+	uint8_t data[CANFD_FRAME_DATA_MAX];
+	int64_t t_us;		/* received: can_time_us() then; ignored on send */
+};
+
+/*
+ * The data length of a 4-bit DLC code, and back. ISO 11898-1 FD lengths,
+ * as the STM32 HAL's own table has them (stm32h5xx_hal_fdcan.c:246,
+ * DLCtoBytes; FDCAN_DLC_BYTES_12..64 at stm32h5xx_hal_fdcan.h:619-625).
+ * canfd_len_to_dlc() is -1 for a length no DLC carries.
+ */
+static inline uint8_t canfd_dlc_to_len(uint8_t dlc)
+{
+	static const uint8_t len[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8,
+					 12, 16, 20, 24, 32, 48, 64 };
+
+	return len[dlc & 0x0F];
+}
+
+static inline int canfd_len_to_dlc(uint8_t len)
+{
+	for (int dlc = 0; dlc < 16; dlc++)
+		if (canfd_dlc_to_len((uint8_t)dlc) == len)
+			return dlc;
+	return -1;
+}
 
 /*
  * A frame passes when ext matches and (frame id & mask) == (id & mask): mask
@@ -86,6 +137,8 @@ struct can_status {
 	uint32_t bus_errors;
 	uint32_t rx_pending;	/* frames waiting to be read */
 	uint32_t tx_pending;	/* frames waiting to go out */
+	uint32_t rx_fd_dropped;	/* FD frames can_recv() passed over: it
+				 * returns Classic frames only */
 };
 
 struct can_dev;
@@ -113,6 +166,15 @@ struct can_ops {
 	/* optional: onto the bus and off it */
 	int (*start)(struct can_dev *can);
 	int (*stop)(struct can_dev *can);
+	/* optional, CAN FD: as send and recv, for struct canfd_frame. The
+	 * frame is checked already; an FD frame or BRS the controller is not
+	 * set up for is -EOPNOTSUPP. recv_fd returns Classic frames too. */
+	int (*send_fd)(struct can_dev *can, const struct canfd_frame *frame,
+		       uint32_t timeout_ms);
+	int (*recv_fd)(struct can_dev *can, struct canfd_frame *frame,
+		       uint32_t timeout_ms);
+	/* optional, CAN FD: the bit rate of the data phase of a BRS frame */
+	int (*set_data_bitrate)(struct can_dev *can, uint32_t bitrate);
 };
 
 struct can_dev {
@@ -138,7 +200,8 @@ int can_send(struct can_dev *can, const struct can_frame *frame,
  * stamped with can_time_us() when the chip did not stamp it. A chip's
  * hardware filter may let more through than asked (the TWAI's does not
  * tell standard from extended frames); those are dropped here, and count
- * against timeout_ms. 0 polls once.
+ * against timeout_ms. 0 polls once. Classic frames only: an FD controller
+ * passes FD frames over and counts them in can_status.rx_fd_dropped.
  */
 int can_recv(struct can_dev *can, struct can_frame *frame,
 	     uint32_t timeout_ms);
@@ -153,6 +216,25 @@ int can_set_filters(struct can_dev *can, const struct can_filter *filters,
 
 /* -EINVAL for 0; a rate the chip cannot make is -EINVAL from the chip. */
 int can_set_bitrate(struct can_dev *can, uint32_t bitrate);
+
+/*
+ * Send a CAN FD or a Classic frame. -EINVAL for an id past its format's
+ * range; for FD, a len that is not a DLC length or a remote frame; for
+ * Classic, a len over 8 or brs. On a controller without send_fd a Classic
+ * frame goes through can_send() and an FD frame is -EOPNOTSUPP.
+ */
+int can_send_fd(struct can_dev *can, const struct canfd_frame *frame,
+		uint32_t timeout_ms);
+
+/*
+ * The next frame, FD or Classic, that passes the filters; as can_recv()
+ * otherwise. On a controller without recv_fd: can_recv()'s frame, fd false.
+ */
+int can_recv_fd(struct can_dev *can, struct canfd_frame *frame,
+		uint32_t timeout_ms);
+
+/* The data-phase bit rate. -EINVAL for 0; -EOPNOTSUPP without FD. */
+int can_set_data_bitrate(struct can_dev *can, uint32_t bitrate);
 
 int can_set_opmode(struct can_dev *can, enum can_opmode mode);
 int can_get_status(struct can_dev *can, struct can_status *status);

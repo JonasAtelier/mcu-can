@@ -109,6 +109,92 @@ int can_set_bitrate(struct can_dev *can, uint32_t bitrate)
 	return can->ops->set_bitrate(can, bitrate);
 }
 
+/* ------------------------------------------------------------ CAN FD -- */
+
+static bool canfd_frame_ok(const struct canfd_frame *frame)
+{
+	if (frame->id > can_id_max(frame->ext))
+		return false;
+	if (frame->fd)
+		return !frame->rtr && canfd_len_to_dlc(frame->len) >= 0;
+	return frame->len <= CAN_FRAME_DATA_MAX && !frame->brs;
+}
+
+int can_send_fd(struct can_dev *can, const struct canfd_frame *frame,
+		uint32_t timeout_ms)
+{
+	struct can_frame classic = { 0 };
+
+	if (!can_bound(can) || !frame || !canfd_frame_ok(frame))
+		return -EINVAL;
+	if (can->ops->send_fd)
+		return can->ops->send_fd(can, frame, timeout_ms);
+	if (frame->fd)
+		return -EOPNOTSUPP;
+	classic.id = frame->id;
+	classic.dlc = frame->len;
+	classic.ext = frame->ext;
+	classic.rtr = frame->rtr;
+	memcpy(classic.data, frame->data, frame->len);
+	return can->ops->send(can, &classic, timeout_ms);
+}
+
+int can_recv_fd(struct can_dev *can, struct canfd_frame *frame,
+		uint32_t timeout_ms)
+{
+	int64_t start = can_time_us();
+
+	if (!can_bound(can) || !frame)
+		return -EINVAL;
+	if (!can->ops->recv_fd) {
+		struct can_frame classic;
+		int ret = can_recv(can, &classic, timeout_ms);
+
+		if (ret)
+			return ret;
+		memset(frame, 0, sizeof(*frame));
+		frame->id = classic.id;
+		frame->len = classic.dlc;
+		frame->ext = classic.ext;
+		frame->rtr = classic.rtr;
+		memcpy(frame->data, classic.data, classic.dlc);
+		frame->t_us = classic.t_us;
+		return 0;
+	}
+	/* As can_recv(), on the FD op. The filters look at id and ext only. */
+	for (;;) {
+		struct canfd_frame tmp = { 0 };
+		struct can_frame match = { 0 };
+		uint32_t elapsed = can_elapsed_ms(start);
+		int ret;
+
+		ret = can->ops->recv_fd(can, &tmp,
+					elapsed >= timeout_ms ? 0 :
+					timeout_ms - elapsed);
+		if (ret)
+			return ret;
+		if (!tmp.t_us)
+			tmp.t_us = can_time_us();
+		match.id = tmp.id;
+		match.ext = tmp.ext;
+		if (can_filter_pass(can->filters, can->filter_count, &match)) {
+			*frame = tmp;
+			return 0;
+		}
+		if (can_elapsed_ms(start) >= timeout_ms)
+			return -ETIMEDOUT;
+	}
+}
+
+int can_set_data_bitrate(struct can_dev *can, uint32_t bitrate)
+{
+	if (!can_bound(can) || !bitrate)
+		return -EINVAL;
+	if (!can->ops->set_data_bitrate)
+		return -EOPNOTSUPP;
+	return can->ops->set_data_bitrate(can, bitrate);
+}
+
 int can_set_opmode(struct can_dev *can, enum can_opmode mode)
 {
 	if (!can_bound(can) || (mode != CAN_OPMODE_NORMAL &&
