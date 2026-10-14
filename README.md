@@ -6,11 +6,13 @@
   <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-f2bd68?style=flat-square&labelColor=0d2238">
 </p>
 
-A small C library for Classic CAN controllers on **ESP-IDF 5.2+** and the
-**STM32 HAL**. The MCP2515, the ESP32's TWAI and the STM32's bxCAN each keep
-a handle API and hand out a `struct can_dev`: frames out and in, acceptance
-filters, the operating mode, error counters and the bus state, the same
-whichever controller carries them. This library replaces
+A small C library for CAN controllers on **ESP-IDF 5.2+** and the **STM32
+HAL**. The MCP2515, the ESP32's TWAI, the STM32's bxCAN and its FDCAN each
+keep a handle API and hand out a `struct can_dev`: frames out and in,
+acceptance filters, the operating mode, error counters and the bus state,
+the same whichever controller carries them. The FDCAN adds CAN FD frames,
+up to 64 bytes with bit-rate switching, through `can_send_fd()` and
+`can_recv_fd()`, which work on the Classic controllers too. This library replaces
 `esp-mcp2515-can`, whose `mcp2515.h` it keeps call for call; the STM32
 port, the TWAI and bxCAN drivers and the category view are new.
 
@@ -37,8 +39,10 @@ component directory `can` as well.
 | **MCP2515** | both | SPI, mode 0,0 or 1,1, up to 10 MHz | 8 or 16 MHz crystal; 125k, 250k, 500k, and 1M with 16 MHz |
 | **TWAI** | ESP-IDF | on-chip, legacy `driver/twai.h` | every controller of the part; 25k to 1M; optional SN65HVD230 Rs pin |
 | **bxCAN** | STM32 HAL | on-chip, the HAL's CAN module | timing, filters and mode set by the app's `HAL_CAN_Init()` |
+| **FDCAN** | STM32 HAL | on-chip, the HAL's FDCAN module; checked against the STM32H5's | Classic and CAN FD; bit rates, filters, modes and bus-off recovery set here; nominal up to 1 Mbit/s, data phase up to 8 Mbit/s with transmitter delay compensation |
 
-One Kconfig option per controller: `CAN_MCP2515`, `CAN_TWAI`, `CAN_BXCAN`.
+One Kconfig option per controller: `CAN_MCP2515`, `CAN_TWAI`, `CAN_BXCAN`,
+`CAN_FDCAN`.
 Wiring is in the [wiring guide](docs/hardware.md).
 
 ## Install
@@ -106,6 +110,14 @@ if (can_recv(can, &rx, 100) == 0)
 - bxCAN takes its timing and filters from the app's CubeMX setup; see
   [API usage](docs/usage.md#bxcan).
 
+CAN FD, on an FDCAN set up for it:
+
+```c
+struct canfd_frame f = { .id = 0x300, .len = 64, .fd = true, .brs = true };
+
+can_send_fd(fdcan_can(fd), &f, 10);
+```
+
 ## Examples
 
 | Controller | ESP-IDF | STM32 HAL |
@@ -114,6 +126,7 @@ if (can_recv(can, &rx, 100) == 0)
 | TWAI | [twai](examples/esp/twai/), the category view and bus-off recovery | -- |
 | both | [dual](examples/esp/dual/), a TWAI-to-MCP2515 bridge through the category | -- |
 | bxCAN | -- | [bxcan](examples/stm/bxcan/main.c), FIFO 0 interrupt to `bxcan_irq()` |
+| FDCAN | -- | [fdcan](examples/stm/fdcan/main.c), the Nexus-S's two buses: CAN FD on FDCAN1, Classic on FDCAN2 |
 
 ESP-IDF examples locate this library through `EXTRA_COMPONENT_DIRS`, which
 assumes the repository is checked out as `can`:
@@ -128,7 +141,13 @@ STM32 examples are snippets to integrate into your application.
 
 ## Scope and limitations
 
-- **Classic CAN only.** No CAN FD, no FDCAN (G0/G4/H7).
+- **CAN FD on the FDCAN only.** The MCP2515, TWAI and bxCAN are Classic.
+  Above 1 Mbit/s in the data phase the FDCAN turns on transmitter delay
+  compensation with a fixed offset at the data sample point; whether a
+  transceiver's loop delay fits is the board's to check (RM0481 60.3.4:
+  delay plus offset under six data bits).
+- **FDCAN checked against the STM32H5 HAL only**; another family's FDCAN
+  HAL may differ.
 - **bxCAN: no bit timing, filters, mode or recovery from this library.**
   Their register layout is in ST's reference manual, which this library
   does not have; those calls are `-EOPNOTSUPP` and the app configures them
@@ -144,9 +163,9 @@ STM32 examples are snippets to integrate into your application.
 | Guide | Contents |
 |---|---|
 | [Installation](docs/installation.md) | Forge, ESP-IDF, STM32 HAL, build options, logging, next to esp-sn65hvd230-can |
-| [Hardware](docs/hardware.md) | Transceivers, termination, the MCP2515's pins and crystal, the TWAI's Rs pin, the STM32's CAN pins |
-| [API usage](docs/usage.md) | Handles and the category view, frames, filters, modes, status and recovery, errors, changes from esp-mcp2515-can |
-| [Chip reference](docs/chips.md) | The MCP2515's bit timing, instructions and registers; the TWAI's filter and states; bxCAN's status bits; each cited |
+| [Hardware](docs/hardware.md) | Transceivers, termination, the MCP2515's pins and crystal, the TWAI's Rs pin, the STM32's CAN and FDCAN pins, the Nexus-S |
+| [API usage](docs/usage.md) | Handles and the category view, frames and CAN FD frames, filters, modes, status and recovery, errors, changes from esp-mcp2515-can |
+| [Chip reference](docs/chips.md) | The MCP2515's bit timing, instructions and registers; the TWAI's filter and states; bxCAN's status bits; the FDCAN's HAL calls, timing ranges and DLC table; each cited |
 | [Development](docs/development.md) | Layout, ports, bus abstraction, adding a driver and test coverage |
 
 ## Tests

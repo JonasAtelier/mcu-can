@@ -34,12 +34,14 @@ PKG_can             = y
 CAN_MCP2515         = y
 # CAN_TWAI is not set
 # CAN_BXCAN is not set
+# CAN_FDCAN is not set
 # CAN_DEBUG is not set
 ```
 
 or with `make menu`. esp-forge turns each line into `CONFIG_CAN_<CHIP>=y` in
 `sdkconfig.defaults`; stm-forge passes it as `-DCONFIG_CAN_<CHIP>=1`.
-`CAN_TWAI` is ignored by stm-forge and `CAN_BXCAN` by ESP-IDF. `CAN_DEBUG =
+`CAN_TWAI` is ignored by stm-forge, and `CAN_BXCAN` and `CAN_FDCAN` by
+ESP-IDF. `CAN_DEBUG =
 y` turns on `can_dbg()` lines on the HAL; on ESP-IDF the log level decides.
 
 ## ESP-IDF
@@ -84,7 +86,7 @@ Copy `include/` and `src/` into an STM32 project, compile every `.c` under
 `src/`, chip folders included, add `include/` and `src/` to the include path
 (`src/` only needs to reach this library's own sources), and define what the
 forge would: `CMSIS_device_header` as your family header (`"stm32f4xx.h"`,
-`"stm32f7xx.h"`, `"stm32g0xx.h"`), `USE_HAL_DRIVER`, and
+`"stm32f7xx.h"`, `"stm32g0xx.h"`, `"stm32h5xx.h"`), `USE_HAL_DRIVER`, and
 `CONFIG_CAN_<CHIP>=1`.
 
 **No chip driver is built by default.** The core is always built and each
@@ -99,11 +101,14 @@ on the HAL whatever its option says.
 |---|---|---|---|
 | MCP2515 | `HAL_SPI_MODULE_ENABLED` | `stm32<family>xx_hal_spi.c` | `mcp2515_init()` |
 | bxCAN | `HAL_CAN_MODULE_ENABLED` | `stm32<family>xx_hal_can.c` | `bxcan_init()`, `bxcan_irq()` |
+| FDCAN | `HAL_FDCAN_MODULE_ENABLED` | `stm32<family>xx_hal_fdcan.c` | `fdcan_init()`, `fdcan_irq()` |
 
 Without the module a chip needs, the build stops with an `#error` in
 `src/can_priv.h`. stm-forge's `mcu/stm32f4.cmake` does not list
 `stm32f4xx_hal_can.c` yet; a bxCAN target needs it added there. The G0 has
-no bxCAN (its CAN is FDCAN).
+no bxCAN (its CAN is FDCAN). stm-forge's `mcu/stm32h5.cmake` lists
+`stm32h5xx_hal_fdcan.c`; the `nucleo563` target (NUCLEO-H563ZI) is the H5
+family's.
 
 **The clock.** Received frames are stamped with `can_time_us()`, by default
 `HAL_GetTick() * 1000`: millisecond steps. It is weak; define your own for

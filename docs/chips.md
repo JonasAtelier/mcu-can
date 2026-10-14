@@ -13,10 +13,19 @@ Sources, cited by section, table, register or file and line:
 | IDF | ESP-IDF v5.5.5, `components/` |
 | HAL | STM32CubeF4 HAL v1.8.5, `stm32f4xx_hal_can.h` |
 | CMSIS | STM32F4 CMSIS device header `stm32f405xx.h` |
+| HAL5 | STM32H5 HAL driver v1.7.0 (STMicroelectronics/stm32h5xx_hal_driver, commit 4b27033), `stm32h5xx_hal_fdcan.h`, `stm32h5xx_hal_fdcan.c`, `stm32h5xx_hal_rcc_ex.h`; BSD-3-Clause |
+| CMSIS5 | cmsis_device_h5 v1.7.0 (commit 884b8dc), `stm32h563xx.h` |
 
 ST's reference manual for the bxCAN (RM0090) is not among them: it could
 not be obtained. What it alone would say -- the bit timing and filter
 register layouts -- this library does not write. See [bxCAN](#bxcan).
+
+The FDCAN's reference manual is: RM0481 Rev 5 (STM32H523/533xx,
+STM32H543/553xx, STM32H562xx and STM32H563/573xx), `docs/rm0481.pdf`
+(gitignored), chapter 60. It arrived after the driver was written against
+the HAL, and was used to check the bit time, the bit-rate limits and the
+bus-off recovery below. The FDCAN driver needs no register layout of its
+own -- the H5 HAL has a call for every setting. See [FDCAN](#fdcan).
 
 ## MCP2515
 
@@ -164,3 +173,115 @@ Without RM0090, and declared so:
   `HAL_CAN_ConfigFilter()`, as CubeMX generates them.
 - The link state reads ESR's three flags as the HAL names them, bus-off
   first, then passive, then warning; nothing more is inferred.
+
+## FDCAN
+
+Every name the driver uses is the HAL's or CMSIS's:
+
+| What | Source |
+|---|---|
+| `HAL_FDCAN_STATE_READY`, `_BUSY`: initialised, started | HAL5 fdcan.h:51-52 |
+| `FDCAN_FRAME_CLASSIC`, `_FD_NO_BRS`, `_FD_BRS` | HAL5 fdcan.h:538-540 |
+| `FDCAN_MODE_NORMAL`, `_BUS_MONITORING`, `_INTERNAL_LOOPBACK` | HAL5 fdcan.h:548-551 |
+| `FDCAN_STANDARD_ID`, `_EXTENDED_ID`; `FDCAN_DATA_FRAME`, `_REMOTE_FRAME` | HAL5 fdcan.h:592-593, :601-602 |
+| `FDCAN_ESI_*`, `FDCAN_BRS_*`, `FDCAN_CLASSIC_CAN`, `FDCAN_FD_CAN`, `FDCAN_NO_TX_EVENTS` | HAL5 fdcan.h:633-660 |
+| `FDCAN_FILTER_MASK` (FilterID1 the id, FilterID2 the mask), `FDCAN_FILTER_TO_RXFIFO0` | HAL5 fdcan.h:671, :681 |
+| `FDCAN_RX_FIFO0`; `FDCAN_ACCEPT_IN_RX_FIFO0`, `FDCAN_REJECT`; `FDCAN_FILTER_REMOTE` | HAL5 fdcan.h:704, :768, :770, :778 |
+| `FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST`, `FDCAN_IT_RX_FIFO0_NEW_MESSAGE` | HAL5 fdcan.h:855, :922 |
+| Filter lists: 0-28 standard, 0-8 extended elements | HAL5 fdcan.h:112-116 |
+| Tx FIFO of 3 elements, Rx FIFO 0 of 3 | HAL5 fdcan.c:213, :216 (`SRAMCAN_RF0_NBR`, `SRAMCAN_TFQ_NBR`) |
+| DLC to length: 0-8, 12, 16, 20, 24, 32, 48, 64 | HAL5 fdcan.c:246 (`DLCtoBytes`); fdcan.h:610-625 (`FDCAN_DLC_BYTES_*`) |
+| CCCR.INIT; CKDIV.PDIV | CMSIS5 :9104, :9610 |
+| `RCC_PERIPHCLK_FDCAN`, `HAL_RCCEx_GetPeriphCLKFreq()` | HAL5 rcc_ex.h:576, :4774 |
+
+### What the HAL does that the driver leans on
+
+- `HAL_FDCAN_Init()` writes the bit timing from `Init` as given, each field
+  less one, into NBTP, and into DBTP only with `FDCAN_FRAME_FD_BRS`; it
+  sizes the filter lists from `StdFiltersNbr`/`ExtFiltersNbr` and **zeroes
+  the whole message RAM**, filters included (fdcan.c:3447-3470). So every
+  setting change re-initialises, then writes the filters back.
+- `HAL_FDCAN_ConfigGlobalFilter()` only works in the READY state (fdcan.c
+  :1380-1397): the driver stops the controller first.
+- `HAL_FDCAN_Start()` leaves initialisation by clearing CCCR.INIT
+  (fdcan.c:1994-2003); bus-off sets INIT again, and `can_recover()` clears
+  it the same way.
+- `HAL_FDCAN_GetRxMessage()` copies as many bytes as the DLC's length,
+  up to 64, whatever the frame's format: the driver reads into a 64-byte
+  buffer, and hands a Classic DLC of 9 to 15 up as 8.
+- The kernel clock divider CKDIV is common to every FDCAN instance and set
+  only from FDCAN1's `Init.ClockDivider` (fdcan.h:61-65, fdcan.c:414-418);
+  the driver reads the register, not the handle.
+
+### What RM0481 confirms
+
+| Fact | RM0481 Rev 5 |
+|---|---|
+| bit time = 1 sync quantum + BS1 + BS2; tq = (BRP + 1) clock periods; BS1 = TSEG1 + 1, BS2 = TSEG2 + 1 quanta | 60.3.3 "Bit timing", p.2892 |
+| the time-quantum clock at most the APB clock | 60.3.3, p.2893 |
+| nominal bit rate up to 1 Mbit/s; data bit rate from the nominal up to 8 Mbit/s | 60.3.4 "Operating modes", p.2893 |
+| bus-off sets INIT; once the CPU clears it, 129 x 11 recessive bits, then the error counters reset | 60.4.13, the note under FDCAN_PSR, p.2930 |
+| transceiver delay compensation: the loop delay past the time before the sample point is a bit error; with DBTP.TDC the bit is checked at a secondary sample point, measured delay + TDCO, in mtq (FDCAN clock periods); delay + TDCO under six data bits, at most 127 mtq | 60.3.4, "Transceiver delay compensation", pp.2896-2897 |
+| DBTP.TDC, bit 23 | 60.4.3, p.2921 |
+| TDCR: TDCO[6:0] bits 14:8, TDCF[6:0] bits 6:0, 0-127 mtq, writable only with CCE and INIT set | 60.4.14, p.2931 |
+
+`can_set_bitrate()` refuses more than 1 Mbit/s accordingly, and
+`can_set_data_bitrate()` more than 8 Mbit/s or less than the nominal rate.
+
+### Transmitter delay compensation
+
+Above 1 Mbit/s, `can_set_data_bitrate()` turns TDC on: TDCO at the data
+sample point, `DataPrescaler x (1 + DataTimeSeg1)` mtq into the bit, TDCF 0,
+through `HAL_FDCAN_ConfigTxDelayCompensation()` and
+`HAL_FDCAN_EnableTxDelayCompensation()` (both READY only). At 1 Mbit/s and
+below it stays off. The threshold and the offset are this library's choice:
+RM0481's own example puts the SSP half a bit in; at or below 1 Mbit/s with a
+75% sample point the loop delay would have to exceed 750 ns to matter.
+`HAL_FDCAN_Init()` writes DBTP whole (stm32h5xx_hal_fdcan.c:505), clearing
+TDC, so every re-initialisation sets it again. An offset past TDCO's 127 mtq
+-- a fast FDCAN clock at a high data rate -- is `-EINVAL`: use CKDIV or a
+slower clock.
+
+An app-configured TDC is preserved: `fdcan_init()` reads DBTP.TDC and
+TDCR's TDCO and TDCF as the app left them, and every re-initialisation
+writes them back. If CubeMX sets a data rate above 1 Mbit/s without TDC,
+call `can_set_data_bitrate()`, which turns it on.
+
+With TDC a data prescaler of 1 or 2 is advised -- CAN in Automation's CAN
+FD bit-timing guidance (CiA 601-3) and ISO 11898-1, as the review relayed
+them; neither is in `docs/`, and RM0481 does not say it. The timing search
+tries the smallest prescaler first, so it lands on 1 or 2 whenever one of
+them makes the rate exactly. When neither does -- 240 MHz at 2 Mbit/s needs
+3 -- the rate is still taken and the driver logs a warning.
+
+With BRS, `can_set_bitrate()` also refuses a nominal rate above the data
+rate the handle's `Init` sets: the data rate is "between nominal bitrate and
+8 Mbit/s" (RM0481 60.3.4).
+
+### Bit timing
+
+A bit is one sync quantum plus `TimeSeg1` plus `TimeSeg2`, each quantum
+`Prescaler` FDCAN clock periods. The ranges are the HAL's field comments
+(fdcan.h:82-110):
+
+| | Prescaler | TimeSeg1 | TimeSeg2 | SyncJumpWidth |
+|---|---|---|---|---|
+| nominal | 1-512 | 2-256 | 2-128 | 1-128 |
+| data | 1-32 | 1-32 | 1-16 | 1-16 |
+
+`src/fdcan/fdcan_math.h` takes the smallest prescaler that makes the rate
+exactly within those ranges, puts the sample point nearest 87.5% (nominal)
+or 75% (data) -- this library's policy, not a standard's -- and widens SJW
+to TimeSeg2. `test/test_fdcan_math.c` works rows by hand and sweeps eleven
+clocks by thirteen rates for the invariants.
+
+### Not done, and why
+
+- **Measuring or configuring the transceiver's loop delay.** The controller
+  measures it in every FD frame (FDCAN_PSR.TDCV); the driver neither reads
+  it nor checks RM0481's "delay plus offset under six data bits".
+- **The TDC filter window** (TDCF) stays 0, off.
+- **Rx FIFO 1, Tx buffers, the Tx event FIFO, timestamps from the
+  controller, high-priority messages**: not used. Frames are stamped with
+  `can_time_us()` when taken from the FIFO.
+

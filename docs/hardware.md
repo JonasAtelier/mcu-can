@@ -64,3 +64,36 @@ GPIO0.
 CAN1_TX and CAN1_RX (or CAN2's) go to the transceiver. Their alternate
 function and the bit timing come from CubeMX, as `HAL_CAN_MspInit()` and
 `hcan.Init`; this library uses what the app set up.
+
+## FDCAN (STM32)
+
+FDCANx_TX and FDCANx_RX go to a CAN FD-capable transceiver; pins, the
+alternate function and the kernel clock come from CubeMX
+(`HAL_FDCAN_MspInit()`). The kernel clock decides which bit rates exist:
+`can_set_bitrate()` takes only rates it divides into exactly, so pick a
+clock that is a multiple of every rate the bus uses (an 8 MHz HSE makes the
+Classic rates up to 1 Mbit/s; 80 MHz makes them with a finer sample point).
+CKDIV, the divider all FDCAN instances share, is set once through FDCAN1's
+`Init.ClockDivider` (stm32h5xx_hal_fdcan.h:61-65). The time-quantum clock
+must not run faster than the FDCAN's APB clock (RM0481 60.3.3).
+
+Fast data phases depend on the transceiver: above 1 Mbit/s the driver uses
+transmitter delay compensation, and the transceiver's loop delay plus the
+offset (the data sample point, 75% of a bit) must stay under six data bits
+(RM0481 60.3.4). The loop delay is in the transceiver's datasheet.
+
+### On the Nexus-S
+
+`hardware/nexus-s` (GPIO.md, README.md) wires the STM32H563's two FDCANs to
+two TCAN1044V transceivers:
+
+| | Pins | STB | Bus |
+|---|---|---|---|
+| FDCAN1 | PD0 RX, PD1 TX, AF9 | PD3 | CAN FD, CAN1A/CAN1B |
+| FDCAN2 | PB5 RX, PB6 TX, AF9 | PB7 | Classic 1 Mbit/s, the ESP32 TWAI nodes, CAN2A/CAN2B |
+
+Each STB has the transceiver's internal pull-up: the transceiver stays in
+standby until the firmware drives STB low (`examples/stm/fdcan/`). Keep
+FDCAN2 at `FDCAN_FRAME_CLASSIC`: a TWAI is Classic CAN, and an FD frame on
+its bus is an error frame to every one of them. FDCAN2's TX is on PB6 rather
+than PB13 because the ROM bootloader drives FDCAN2_TX on PB13.
