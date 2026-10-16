@@ -16,9 +16,11 @@ Sources, cited by section, table, register or file and line:
 | HAL5 | STM32H5 HAL driver v1.7.0 (STMicroelectronics/stm32h5xx_hal_driver, commit 4b27033), `stm32h5xx_hal_fdcan.h`, `stm32h5xx_hal_fdcan.c`, `stm32h5xx_hal_rcc_ex.h`; BSD-3-Clause |
 | CMSIS5 | cmsis_device_h5 v1.7.0 (commit 884b8dc), `stm32h563xx.h` |
 
-ST's reference manual for the bxCAN (RM0090) is not among them: it could
-not be obtained. What it alone would say -- the bit timing and filter
-register layouts -- this library does not write. See [bxCAN](#bxcan).
+The bxCAN's reference manual is RM0090 Rev 3 (STM32F40x, STM32F41x,
+STM32F42x and STM32F43x, Doc ID 018909), `docs/rm0090.pdf` (gitignored),
+chapter 24. It arrived after the driver was written against the HAL; with
+it the driver sets the bit rate, the mode and the filter banks and leaves
+bus-off. See [bxCAN](#bxcan).
 
 The FDCAN's reference manual is: RM0481 Rev 5 (STM32H523/533xx,
 STM32H543/553xx, STM32H562xx and STM32H563/573xx), `docs/rm0481.pdf`
@@ -164,15 +166,34 @@ Every name the driver uses is the HAL's or CMSIS's:
 | `HAL_CAN_ActivateNotification/DeactivateNotification`, `HAL_CAN_GetState` | HAL :707-708, :744 |
 | ESR: `CAN_ESR_EWGF`, `_EPVF`, `_BOFF`; `CAN_ESR_TEC`, `_REC` and their positions | CMSIS :1879-1886, :1895-1900 |
 | FIFO 0 overrun `CAN_RF0R_FOVR0`; fill level `CAN_RF0R_FMP0`, two bits | CMSIS :1812-1813, :1806-1807 |
+| `HAL_CAN_Init()`: writes MCR's options and BTR from `Init`, nothing else | HAL :649 |
+| `CAN_MODE_NORMAL`, `_SILENT`, `_SILENT_LOOPBACK` | HAL :337-340 |
+| `CAN_SJW_xTQ`, `CAN_BS1_xTQ`, `CAN_BS2_xTQ`: the value less one, at its BTR position | HAL :350-391 |
+| MCR `CAN_MCR_INRQ`, `_ABOM`; MSR `CAN_MSR_INAK` | CMSIS :1671, :1689, :1702 |
+| BTR `CAN_BTR_TS1_Pos`, `_TS2_Pos`, `_SJW_Pos` | CMSIS :1906-1919 |
+| FMR `CAN_FMR_FINIT`, `CAN_FMR_CAN2SB` and its position | CMSIS :2211-2214 |
 
-Without RM0090, and declared so:
+What RM0090 Rev 3 gives, and the driver does with it:
 
-- `can_set_bitrate()`, `can_set_filters()`, `can_set_opmode()` and
-  `can_recover()` are `-EOPNOTSUPP`. Bit timing, mode and automatic bus-off
-  management are the app's `HAL_CAN_Init()`; filters its
-  `HAL_CAN_ConfigFilter()`, as CubeMX generates them.
-- The link state reads ESR's three flags as the HAL names them, bus-off
-  first, then passive, then warning; nothing more is inferred.
+| What | Value | Source |
+|---|---|---|
+| Bit rate | up to 1 Mbit/s | 24.2 |
+| Clock | APB1 (CAN1EN in RCC_APB1ENR) | 6.3.15 |
+| Bit time | 1 + (TS1 + 1) + (TS2 + 1) quanta of (BRP + 1) APB1 periods | 24.7.7, Figure 235 |
+| BTR fields | BRP[9:0], TS1[3:0] at 19:16, TS2[2:0] at 22:20, SJW[1:0] at 25:24; SILM 31, LBKM 30; written in initialisation mode only | 24.9.2, 24.9.1 |
+| Listen | silent mode: receives, sends recessive bits only, "cannot start a transmission" -- so `can_send()` is `-EOPNOTSUPP` | 24.5.1 |
+| Loopback | loop back combined with silent: CANRX cut off, CANTX held recessive -- off the bus | 24.5.3 |
+| Filter banks | 28, shared: CAN1 below FMR.CAN2SB (reset 14), CAN2 from it; in CAN1's registers | 24.3.4, 24.9.4 |
+| 32-bit bank | ID in FR1, mask in FR2: STID[10:0] at 31:21, EXID[17:0] at 20:3, IDE 2, RTR 1 | Figure 231 |
+| Bank setup | FS1R scale, FM1R mode, FFA1R FIFO: writable with FMR.FINIT set; FINIT pauses reception; unused banks left off | 24.9.1, 24.4.1, 24.7.4 |
+| Bus-off | BOFF while TEC > 255; left after 128 x 11 recessive bits, by itself with MCR.ABOM, else once software has set and cleared MCR.INRQ | 24.7.6, CAN_MCR in 24.9.2 |
+| Initialisation mode | INRQ set; entered once MSR.INAK is set | 24.4.1 |
+
+Policy, not RM0090's: the sample point, 87.5%, as the FDCAN's nominal
+phase; the filters' bank layout -- one 32-bit mask bank per filter, IDE
+compared, RTR not, all into FIFO 0; and waiting at most 10 ms for INAK, the
+HAL's own `CAN_TIMEOUT_VALUE` (stm32f4xx_hal_can.c:237). The link state
+reads ESR's flags bus-off first, then passive, then warning.
 
 ## FDCAN
 

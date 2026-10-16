@@ -38,7 +38,7 @@ component directory `can` as well.
 |---|---|---|---|
 | **MCP2515** | both | SPI, mode 0,0 or 1,1, up to 10 MHz | 8 or 16 MHz crystal; 125k, 250k, 500k, and 1M with 16 MHz |
 | **TWAI** | ESP-IDF | on-chip, legacy `driver/twai.h` | every controller of the part; 25k to 1M; optional SN65HVD230 Rs pin |
-| **bxCAN** | STM32 HAL | on-chip, the HAL's CAN module | timing, filters and mode set by the app's `HAL_CAN_Init()` |
+| **bxCAN** | STM32 HAL | on-chip, the HAL's CAN module | bit rates up to 1 Mbit/s, filters, modes and bus-off recovery set here, after the app's `HAL_CAN_Init()` |
 | **FDCAN** | STM32 HAL | on-chip, the HAL's FDCAN module; checked against the STM32H5's | Classic and CAN FD; bit rates, filters, modes and bus-off recovery set here; nominal up to 1 Mbit/s, data phase up to 8 Mbit/s with transmitter delay compensation |
 
 One Kconfig option per controller: `CAN_MCP2515`, `CAN_TWAI`, `CAN_BXCAN`,
@@ -107,8 +107,8 @@ if (can_recv(can, &rx, 100) == 0)
   the HAL, **0 or a negative errno**. `can_*` is errno on both.
 - **Mind the crystal.** A wrong `crystal_hz` is a wrong bit rate, and the bus
   does not say so. Read the can on the crystal.
-- bxCAN takes its timing and filters from the app's CubeMX setup; see
-  [API usage](docs/usage.md#bxcan).
+- bxCAN starts from the app's CubeMX setup, and `can_set_filters()` takes
+  over all its filter banks; see [API usage](docs/usage.md#bxcan).
 
 CAN FD, on an FDCAN set up for it:
 
@@ -148,10 +148,8 @@ STM32 examples are snippets to integrate into your application.
   delay plus offset under six data bits).
 - **FDCAN checked against the STM32H5 HAL only**; another family's FDCAN
   HAL may differ.
-- **bxCAN: no bit timing, filters, mode or recovery from this library.**
-  Their register layout is in ST's reference manual, which this library
-  does not have; those calls are `-EOPNOTSUPP` and the app configures them
-  through the HAL.
+- **bxCAN checked against RM0090 (STM32F4) only**; the F1, F2, F7 and L4
+  manuals are not in `docs/`.
 - **TWAI: filter, mode and bit rate only while stopped**, the legacy
   driver's install-time settings. One filter.
 - **MCP2515: up to two filters** through the category, one per receive
@@ -165,7 +163,7 @@ STM32 examples are snippets to integrate into your application.
 | [Installation](docs/installation.md) | Forge, ESP-IDF, STM32 HAL, build options, logging, next to esp-sn65hvd230-can |
 | [Hardware](docs/hardware.md) | Transceivers, termination, the MCP2515's pins and crystal, the TWAI's Rs pin, the STM32's CAN and FDCAN pins, the Nexus-S |
 | [API usage](docs/usage.md) | Handles and the category view, frames and CAN FD frames, filters, modes, status and recovery, errors, changes from esp-mcp2515-can |
-| [Chip reference](docs/chips.md) | The MCP2515's bit timing, instructions and registers; the TWAI's filter and states; bxCAN's status bits; the FDCAN's HAL calls, timing ranges and DLC table; each cited |
+| [Chip reference](docs/chips.md) | The MCP2515's bit timing, instructions and registers; the TWAI's filter and states; bxCAN's timing, filter banks and bus-off; the FDCAN's HAL calls, timing ranges and DLC table; each cited |
 | [Development](docs/development.md) | Layout, ports, bus abstraction, adding a driver and test coverage |
 
 ## Tests

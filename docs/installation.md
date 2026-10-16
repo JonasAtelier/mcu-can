@@ -104,8 +104,9 @@ on the HAL whatever its option says.
 | FDCAN | `HAL_FDCAN_MODULE_ENABLED` | `stm32<family>xx_hal_fdcan.c` | `fdcan_init()`, `fdcan_irq()` |
 
 Without the module a chip needs, the build stops with an `#error` in
-`src/can_priv.h`. stm-forge's `mcu/stm32f4.cmake` does not list
-`stm32f4xx_hal_can.c` yet; a bxCAN target needs it added there. The G0 has
+`src/can_priv.h`. stm-forge's `mcu/stm32f4.cmake` lists
+`stm32f4xx_hal_can.c`, which compiles to nothing until the app's hal_conf
+enables the module; `mcu/stm32f7.cmake` does not yet. The G0 has
 no bxCAN (its CAN is FDCAN). stm-forge's `mcu/stm32h5.cmake` lists
 `stm32h5xx_hal_fdcan.c`; the `nucleo563` target (NUCLEO-H563ZI) is the H5
 family's.

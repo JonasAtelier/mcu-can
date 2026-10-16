@@ -85,7 +85,7 @@ controller's hardware lets through beyond them never reaches the app.
 |---|---|---|
 | MCP2515 | up to 2: the first on RXB0, the second on RXB1; one alone goes on both | any time; Configuration mode for the writes, which clears TEC and REC |
 | TWAI | 1, the single filter mode; it cannot tell standard from extended frames, the software check does | only while stopped |
-| bxCAN | none: `-EOPNOTSUPP`; the app calls `HAL_CAN_ConfigFilter()` | -- |
+| bxCAN | 2: each a 32-bit mask bank into FIFO 0, standard or extended; the controller's other banks turned off; none is one bank of mask 0 | any time; filter initialisation mode pauses reception meanwhile |
 | FDCAN | 2: each a mask filter element into Rx FIFO 0, standard or extended; the rest rejected; none accepts all | any time: stops, re-initialises, starts again |
 
 On the FDCAN, `can_set_filters()`, `can_set_bitrate()`,
@@ -101,10 +101,10 @@ filter on both buffers, and mask 0 accepts **everything**, both formats.
 
 | | MCP2515 | TWAI | bxCAN | FDCAN |
 |---|---|---|---|---|
-| `can_set_opmode()` | any time; while stopped, at start | while stopped | `-EOPNOTSUPP` (the app's `Init.Mode`) | any time (re-init) |
-| loopback | Loopback mode | NO_ACK, every frame sent with self-reception | -- | `FDCAN_MODE_INTERNAL_LOOPBACK`: off the bus |
-| listen-only | Listen-Only mode | LISTEN_ONLY; `can_send()` is `-EOPNOTSUPP` | -- | `FDCAN_MODE_BUS_MONITORING`; sending is `-EOPNOTSUPP` |
-| `can_set_bitrate()` | 125k, 250k, 500k; 1M at 16 MHz | 25k, 50k, 100k, 125k, 250k, 500k, 800k, 1M, while stopped | `-EOPNOTSUPP` (the app's `Init`) | up to 1M, any rate the FDCAN clock divides into exactly; sample point 87.5% |
+| `can_set_opmode()` | any time; while stopped, at start | while stopped | any time (re-init) | any time (re-init) |
+| loopback | Loopback mode | NO_ACK, every frame sent with self-reception | `CAN_MODE_SILENT_LOOPBACK`: off the bus | `FDCAN_MODE_INTERNAL_LOOPBACK`: off the bus |
+| listen-only | Listen-Only mode | LISTEN_ONLY; `can_send()` is `-EOPNOTSUPP` | `CAN_MODE_SILENT`; sending is `-EOPNOTSUPP` | `FDCAN_MODE_BUS_MONITORING`; sending is `-EOPNOTSUPP` |
+| `can_set_bitrate()` | 125k, 250k, 500k; 1M at 16 MHz | 25k, 50k, 100k, 125k, 250k, 500k, 800k, 1M, while stopped | up to 1M, any rate APB1 divides into exactly; sample point 87.5% (re-init) | up to 1M, any rate the FDCAN clock divides into exactly; sample point 87.5% |
 | `can_set_data_bitrate()` | `-EOPNOTSUPP` | `-EOPNOTSUPP` | `-EOPNOTSUPP` | with `FDCAN_FRAME_FD_BRS` only, from the nominal rate up to 8M, exact; sample point 75%; above 1M with transmitter delay compensation |
 | `can_stop()` | Configuration mode: off the bus, counters cleared | stop and uninstall; queued frames dropped | `HAL_CAN_Stop()` | `HAL_FDCAN_Stop()` |
 | `can_start()` | back to the running mode | install with the settings as they are, then start | `HAL_CAN_Start()` | `HAL_FDCAN_Start()` |
@@ -120,6 +120,17 @@ offset at the data sample point ([chips](chips.md#transmitter-delay-compensation
 The transceiver's loop delay plus that offset must stay under six data bits
 (RM0481 60.3.4): check it against the transceiver's datasheet.
 
+The bxCAN's clock is APB1's (`HAL_RCC_GetPCLK1Freq()`); the same search
+finds its timing within CAN_BTR's ranges, 1 to 16 quanta before the sample
+point and 1 to 8 after (RM0090 24.7.7). 42 MHz makes 500 kbit/s and
+1 Mbit/s with 14 quanta, the sample point at 12. On the bxCAN and the FDCAN
+both, `can_set_bitrate()` and `can_set_opmode()` stop a running controller,
+run the HAL's init again with the new setting and start it again. **Frames
+still queued to send are dropped** on both: the FDCAN's init clears them,
+and the bxCAN driver aborts its three mailboxes first
+(`HAL_CAN_AbortTxRequest()`), so nothing goes out under the new setting
+that was queued under the old.
+
 The TWAI's settings that need a stopped controller answer `-EBUSY`
 otherwise (`ESP_ERR_INVALID_STATE` through the handle API).
 
@@ -130,7 +141,7 @@ keep read 0.
 
 | Field | MCP2515 | TWAI | bxCAN | FDCAN |
 |---|---|---|---|---|
-| `link` | from EFLG: TXBO, TXEP/RXEP, EWARN | from the driver's state and the counters: 96 warning, 128 passive | from ESR: BOFF, EPVF, EWGF; STOPPED unless started | from `HAL_FDCAN_GetProtocolStatus()`: BusOff (BUS_OFF while CCCR.INIT is set, RECOVERING after), ErrorPassive, Warning; STOPPED unless started |
+| `link` | from EFLG: TXBO, TXEP/RXEP, EWARN | from the driver's state and the counters: 96 warning, 128 passive | from ESR: BOFF (RECOVERING with MCR.ABOM set or after `can_recover()`), EPVF, EWGF; STOPPED unless started | from `HAL_FDCAN_GetProtocolStatus()`: BusOff (BUS_OFF while CCCR.INIT is set, RECOVERING after), ErrorPassive, Warning; STOPPED unless started |
 | `tec`, `rec` | TEC, REC | the driver's counters (TEC 256 in bus-off) | ESR | `HAL_FDCAN_GetErrorCounters()` |
 | `rx_lost` | 1 while EFLG.RXnOVR is set | missed plus overrun | ring drops, plus 1 while FIFO 0's overrun flag is set | ring drops, plus each Rx FIFO 0 overflow: the message-lost flag counted and cleared |
 | `tx_failed`, `arb_lost`, `bus_errors` | 0 | the driver's counts | 0 | 0 |
@@ -145,8 +156,18 @@ Leaving bus-off:
   The driver leaves the controller stopped after it; `can_start()` starts it
   again. Or set `cfg.restart_ms` and call `twaican_service()` from the app's
   loop, which does both, as esp-sn65hvd230-can's `hvd230_service()` does.
-- **bxCAN**: the app's `Init.AutoBusOff`; `can_recover()` is
-  `-EOPNOTSUPP`.
+- **bxCAN**: with the app's `Init.AutoBusOff` (MCR.ABOM) the controller
+  leaves bus-off by itself after 128 x 11 recessive bits, `link` reading
+  RECOVERING meanwhile, and `can_recover()` returns 0. Without it,
+  `can_recover()` enters and leaves initialisation mode, which lets that
+  wait start (RM0090 24.7.6); `-ETIMEDOUT` if initialisation mode is not
+  entered within 10 ms. `-EBUSY` unless bus-off, `-ENETDOWN` while
+  stopped, as on the FDCAN. The controller has no flag for a recovery under
+  way, so RECOVERING after `can_recover()` is the driver's note, kept until
+  it sees BOFF clear: a recovery and a second bus-off both between two
+  `can_get_status()` calls still read RECOVERING. `can_recover()` works
+  whenever BOFF is set, so call it again if RECOVERING lasts longer than
+  the bus could take.
 - **FDCAN**: bus-off sets CCCR.INIT and the controller stays off the bus.
   `can_recover()` clears INIT, as `HAL_FDCAN_Start()` does to leave
   initialisation; the controller then waits 129 x 11 recessive bits by
@@ -164,7 +185,8 @@ call `can_irq(can)` from the pin's ISR or EXTI callback and wait on
 
 ## bxCAN
 
-The app owns the peripheral. Before `bxcan_init()`:
+The app owns the peripheral's clock, pins and first setup. Before
+`bxcan_init()`:
 
 ```c
 hcan1.Init.Prescaler = ...;          /* from CubeMX: the bit timing */
@@ -173,6 +195,14 @@ hcan1.Init.AutoBusOff = ENABLE;      /* leave bus-off on its own */
 HAL_CAN_Init(&hcan1);
 HAL_CAN_ConfigFilter(&hcan1, &filter);   /* to FIFO 0 */
 ```
+
+After that, bit rate, filters and mode are the library's to set too (see
+above). `can_set_filters()` takes over all the controller's filter banks:
+on a part with two CANs, CAN1's are those below `CAN_FMR.CAN2SB` and
+CAN2's the rest, both in CAN1's registers (RM0090 24.9.4); it needs two
+of them, `-ENOSPC` otherwise; a CAN2SB past 28, which RM0090 does not
+define, is `-EINVAL`. A filter the app set on FIFO 1 is turned off with the
+rest.
 
 With `use_irq`, enable the CAN RX0 interrupt in the NVIC and call
 `bxcan_irq()` from the HAL's callback; the driver turns on the FIFO 0
