@@ -8,6 +8,7 @@
 
 uint32_t stub_tick;
 FDCAN_Config_TypeDef stub_fdcan_config;
+CAN_TypeDef stub_can1, stub_can2;
 uint32_t SystemCoreClock = 16000000;	/* an STM32's HSI at reset */
 uint32_t stub_systick_step = 1;
 uint64_t stub_cycles;

@@ -144,8 +144,10 @@ void stub_uart_flush(UART_HandleTypeDef *huart);
 /*
  * The bxCAN slice: the HAL's CAN module (stm32f4xx_hal_can.h v1.8.5) and the
  * CMSIS register bits bxcan.c reads (stm32f405xx.h), with the F4 values.
- * The register block carries only RF0R and ESR; test/stm/test_bxcan.c
- * defines the HAL_CAN_* functions over a fake controller.
+ * The register block carries only the registers the driver touches, in no
+ * particular order; test/stm/test_bxcan.c defines the HAL_CAN_* functions
+ * over a fake controller. CAN1 holds the filter banks of both, as on an F4
+ * with two CANs.
  */
 typedef enum {
 	DISABLE = 0U,
@@ -153,9 +155,35 @@ typedef enum {
 } FunctionalState;
 
 typedef struct {
+	uint32_t FR1;
+	uint32_t FR2;
+} CAN_FilterRegister_TypeDef;
+
+typedef struct {
+	uint32_t MCR;
+	uint32_t MSR;
 	uint32_t RF0R;
 	uint32_t ESR;
+	uint32_t BTR;
+	uint32_t FMR;
+	uint32_t FM1R;
+	uint32_t FS1R;
+	uint32_t FFA1R;
+	uint32_t FA1R;
+	CAN_FilterRegister_TypeDef sFilterRegister[28];
 } CAN_TypeDef;
+
+extern CAN_TypeDef stub_can1, stub_can2;
+#define CAN1				(&stub_can1)
+#define CAN2				(&stub_can2)
+
+typedef struct {
+	uint32_t Prescaler;
+	uint32_t Mode;
+	uint32_t SyncJumpWidth;
+	uint32_t TimeSeg1;
+	uint32_t TimeSeg2;
+} CAN_InitTypeDef;
 
 typedef enum {
 	HAL_CAN_STATE_RESET		= 0x00U,
@@ -168,6 +196,7 @@ typedef enum {
 
 typedef struct {
 	CAN_TypeDef *Instance;
+	CAN_InitTypeDef Init;
 	HAL_CAN_StateTypeDef State;
 	uint32_t ErrorCode;
 } CAN_HandleTypeDef;
@@ -197,6 +226,9 @@ typedef struct {
 #define CAN_RTR_REMOTE			(0x00000002U)
 #define CAN_RX_FIFO0			(0x00000000U)
 #define CAN_IT_RX_FIFO0_MSG_PENDING	(0x00000002U)	/* CAN_IER_FMPIE0 */
+#define CAN_TX_MAILBOX0			(0x00000001U)
+#define CAN_TX_MAILBOX1			(0x00000002U)
+#define CAN_TX_MAILBOX2			(0x00000004U)
 
 #define CAN_RF0R_FOVR0			(0x1UL << 4U)
 #define CAN_ESR_EWGF			(0x1UL << 0U)
@@ -206,9 +238,28 @@ typedef struct {
 #define CAN_ESR_TEC_Msk			(0xFFUL << CAN_ESR_TEC_Pos)
 #define CAN_ESR_REC_Pos			(24U)
 #define CAN_ESR_REC_Msk			(0xFFUL << CAN_ESR_REC_Pos)
+#define CAN_MCR_INRQ			(0x1UL << 0U)
+#define CAN_MCR_ABOM			(0x1UL << 6U)
+#define CAN_MSR_INAK			(0x1UL << 0U)
+#define CAN_BTR_TS1_Pos			(16U)
+#define CAN_BTR_TS2_Pos			(20U)
+#define CAN_BTR_SJW_Pos			(24U)
+#define CAN_BTR_LBKM			(0x1UL << 30U)
+#define CAN_BTR_SILM			(0x1UL << 31U)
+#define CAN_FMR_FINIT			(0x1UL << 0U)
+#define CAN_FMR_CAN2SB_Pos		(8U)
+#define CAN_FMR_CAN2SB			(0x3FUL << CAN_FMR_CAN2SB_Pos)
 
+#define CAN_MODE_NORMAL			(0x00000000U)
+#define CAN_MODE_LOOPBACK		((uint32_t)CAN_BTR_LBKM)
+#define CAN_MODE_SILENT			((uint32_t)CAN_BTR_SILM)
+#define CAN_MODE_SILENT_LOOPBACK	((uint32_t)(CAN_BTR_LBKM | CAN_BTR_SILM))
+
+HAL_StatusTypeDef HAL_CAN_Init(CAN_HandleTypeDef *hcan);
 HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *hcan);
 HAL_StatusTypeDef HAL_CAN_Stop(CAN_HandleTypeDef *hcan);
+HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *hcan,
+					 uint32_t TxMailboxes);
 HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *hcan,
 				       const CAN_TxHeaderTypeDef *pHeader,
 				       const uint8_t aData[],
@@ -225,6 +276,7 @@ HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *hcan,
 HAL_StatusTypeDef HAL_CAN_DeactivateNotification(CAN_HandleTypeDef *hcan,
 						 uint32_t InactiveITs);
 HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef *hcan);
+uint32_t HAL_RCC_GetPCLK1Freq(void);
 
 /*
  * The FDCAN slice: the HAL's FDCAN module (stm32h5xx_hal_fdcan.h, STM32H5
