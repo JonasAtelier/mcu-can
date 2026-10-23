@@ -28,22 +28,88 @@ component directory `can` as well.
 > ESP-IDF and HAL drivers, and platform stubs. Nothing here has run on a
 > physical bus.
 
-[Supported hardware](#supported-hardware) · [Install](#install) ·
+[Supported hardware](#supported-hardware) · [Drivers](#drivers) ·
+[Install](#install) ·
 [Quick start](#quick-start) · [Examples](#examples) ·
 [Documentation](#documentation) · [Tests](#tests) · [License](#license)
 
 ## Supported hardware
 
-| Controller | Platform | Interface | Notes |
-|---|---|---|---|
-| **MCP2515** | both | SPI, mode 0,0 or 1,1, up to 10 MHz | 8 or 16 MHz crystal; 125k, 250k, 500k, and 1M with 16 MHz |
-| **TWAI** | ESP-IDF | on-chip, legacy `driver/twai.h` | every controller of the part; 25k to 1M; optional SN65HVD230 Rs pin |
-| **bxCAN** | STM32 HAL | on-chip, the HAL's CAN module | bit rates up to 1 Mbit/s, filters, modes and bus-off recovery set here, after the app's `HAL_CAN_Init()` |
-| **FDCAN** | STM32 HAL | on-chip, the HAL's FDCAN module; checked against the STM32H5's | Classic and CAN FD; bit rates, filters, modes and bus-off recovery set here; nominal up to 1 Mbit/s, data phase up to 8 Mbit/s with transmitter delay compensation |
+| Controller | Interface | Notes |
+|---|---|---|
+| **MCP2515** | SPI | standalone CAN controller |
+| **TWAI** | on-chip (ESP-IDF) | the ESP32's own CAN controller |
+| **bxCAN** | on-chip (STM32 HAL) | the STM32's own CAN controller |
+| **FDCAN** | on-chip (STM32 HAL) | the STM32's own CAN FD controller |
 
 One Kconfig option per controller: `CAN_MCP2515`, `CAN_TWAI`, `CAN_BXCAN`,
 `CAN_FDCAN`.
 Wiring is in the [wiring guide](docs/hardware.md).
+
+## Drivers
+
+<details><summary><b>MCP2515</b> — SPI</summary>
+
+8 or 16 MHz crystal; 125k, 250k, 500k, and 1M with 16 MHz.
+
+- Platform: both
+- Interface: SPI, mode 0,0 or 1,1, up to 10 MHz
+- Examples: ESP-IDF [mcp2515](examples/esp/mcp2515/) (esp-mcp2515-can's) ·
+  STM32 HAL [mcp2515](examples/stm/mcp2515/main.c)
+- Examples (with the TWAI): ESP-IDF [dual](examples/esp/dual/), a
+  TWAI-to-MCP2515 bridge through the category · STM32 HAL none
+- **MCP2515: up to two filters** through the category, one per receive
+  buffer.
+- Chip reference: [MCP2515](docs/chips.md#mcp2515)
+
+</details>
+
+<details><summary><b>TWAI</b> — on-chip (ESP-IDF)</summary>
+
+Every controller of the part; 25k to 1M; optional SN65HVD230 Rs pin.
+
+- Platform: ESP-IDF
+- Interface: on-chip, legacy `driver/twai.h`
+- Examples: ESP-IDF [twai](examples/esp/twai/), the category view and bus-off
+  recovery · STM32 HAL none
+- Examples (with an MCP2515): ESP-IDF [dual](examples/esp/dual/), a
+  TWAI-to-MCP2515 bridge through the category · STM32 HAL none
+- **TWAI: filter, mode and bit rate only while stopped**, the legacy
+  driver's install-time settings. One filter.
+- Chip reference: [TWAI](docs/chips.md#twai)
+
+</details>
+
+<details><summary><b>bxCAN</b> — on-chip (STM32 HAL)</summary>
+
+Bit rates up to 1 Mbit/s, filters, modes and bus-off recovery set here, after
+the app's `HAL_CAN_Init()`.
+
+- Platform: STM32 HAL
+- Interface: on-chip, the HAL's CAN module
+- Examples: ESP-IDF none · STM32 HAL [bxcan](examples/stm/bxcan/main.c), FIFO
+  0 interrupt to `bxcan_irq()`
+- **bxCAN checked against RM0090 (STM32F4) only**; the F1, F2, F7 and L4
+  manuals are not in `docs/`.
+- Chip reference: [bxCAN](docs/chips.md#bxcan)
+
+</details>
+
+<details><summary><b>FDCAN</b> — on-chip (STM32 HAL)</summary>
+
+Classic and CAN FD; bit rates, filters, modes and bus-off recovery set here;
+nominal up to 1 Mbit/s, data phase up to 8 Mbit/s with transmitter delay
+compensation.
+
+- Platform: STM32 HAL
+- Interface: on-chip, the HAL's FDCAN module; checked against the STM32H5's
+- Examples: ESP-IDF none · STM32 HAL [fdcan](examples/stm/fdcan/main.c), the
+  Nexus-S's two buses: CAN FD on FDCAN1, Classic on FDCAN2
+- **FDCAN checked against the STM32H5 HAL only**; another family's FDCAN
+  HAL may differ.
+- Chip reference: [FDCAN](docs/chips.md#fdcan)
+
+</details>
 
 ## Install
 
@@ -120,13 +186,7 @@ can_send_fd(fdcan_can(fd), &f, 10);
 
 ## Examples
 
-| Controller | ESP-IDF | STM32 HAL |
-|---|---|---|
-| MCP2515 | [mcp2515](examples/esp/mcp2515/) (esp-mcp2515-can's) | [mcp2515](examples/stm/mcp2515/main.c) |
-| TWAI | [twai](examples/esp/twai/), the category view and bus-off recovery | -- |
-| both | [dual](examples/esp/dual/), a TWAI-to-MCP2515 bridge through the category | -- |
-| bxCAN | -- | [bxcan](examples/stm/bxcan/main.c), FIFO 0 interrupt to `bxcan_irq()` |
-| FDCAN | -- | [fdcan](examples/stm/fdcan/main.c), the Nexus-S's two buses: CAN FD on FDCAN1, Classic on FDCAN2 |
+Each driver's examples are listed under [Drivers](#drivers).
 
 ESP-IDF examples locate this library through `EXTRA_COMPONENT_DIRS`, which
 assumes the repository is checked out as `can`:
@@ -146,14 +206,6 @@ STM32 examples are snippets to integrate into your application.
   compensation with a fixed offset at the data sample point; whether a
   transceiver's loop delay fits is the board's to check (RM0481 60.3.4:
   delay plus offset under six data bits).
-- **FDCAN checked against the STM32H5 HAL only**; another family's FDCAN
-  HAL may differ.
-- **bxCAN checked against RM0090 (STM32F4) only**; the F1, F2, F7 and L4
-  manuals are not in `docs/`.
-- **TWAI: filter, mode and bit rate only while stopped**, the legacy
-  driver's install-time settings. One filter.
-- **MCP2515: up to two filters** through the category, one per receive
-  buffer.
 - **No locks.** One thread per device, or your own mutex.
 
 ## Documentation
