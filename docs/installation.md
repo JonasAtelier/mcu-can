@@ -20,6 +20,9 @@ that works on both, turn on `CAN_MCP2515` instead and start from its example
 in `examples/esp/mcp2515` or `examples/stm/mcp2515`. The reference follows
 the guides.
 
+**Arduino is not supported yet.** TODO: make the library usable from
+Arduino (Arduino IDE and PlatformIO).
+
 ## ESP-IDF, step by step
 
 **You need** ESP-IDF 5.2 or newer, with `idf.py` working in your terminal, and
