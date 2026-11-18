@@ -38,7 +38,8 @@ examples/
   esp/<name>/               ESP-IDF projects: mcp2515 (esp-mcp2515-can's), twai, dual
   stm/<name>/               STM32 snippets: mcp2515, bxcan, fdcan
 docs/                       the five guides; the datasheets here are gitignored
-CMakeLists.txt              ESP-IDF only; stm-forge globs src/**/*.c instead
+CMakeLists.txt              ESP-IDF component; elsewhere a static library for add_subdirectory(); stm-forge globs src/**/*.c instead
+                            the static library's options are Kconfig's bool entries, found by the type line directly under each `config`
 Kconfig                     CAN and CAN_<CHIP>, for ESP-IDF and both forges' menus
 idf_component.yml           ESP-IDF component manifest
 LICENSE                     MIT
@@ -137,7 +138,8 @@ platform's own driver.
    and only then set `can.ops` and `can.priv`. Wait with deadlines on
    `can_elapsed_ms()`. Work in errno; return `CAN_HANDLE_RET(err)`.
 4. Add `CONFIG_CAN_FOO` to:
-   - the no-chip checks in `CMakeLists.txt` and `src/can_port_stm.c`;
+   - the no-chip checks in `CMakeLists.txt` (its ESP-IDF part; the
+     `add_subdirectory()` part reads `Kconfig`) and `src/can_port_stm.c`;
    - a HAL module `#error` in `src/can_priv.h`;
    - its sources in `CMakeLists.txt`;
    - `Kconfig`;

@@ -11,12 +11,13 @@
 
 /*
  * The core is always built; each chip driver only under its own option. With
- * the library on and no chip picked, say so -- stm-forge compiles this file
- * only when PKG_can = y, so this is the CMakeLists' "CAN on, no chip"
- * warning on the ESP-IDF side. The TWAI is ESP-IDF's, so not counted here.
+ * the library built and no chip picked, say so: this file is compiled only
+ * when the library is, so this is the CMakeLists' "no chip" warning for every
+ * build that never reads that file (stm-forge, a hand-made project). The
+ * TWAI is ESP-IDF's, so not counted here.
  */
 #if !(CONFIG_CAN_MCP2515 || CONFIG_CAN_BXCAN || CONFIG_CAN_FDCAN)
-#warning "can: no chip driver is selected; set CAN_<CHIP> = y under PKG_can = y (or -DCONFIG_CAN_<CHIP>=1)"
+#warning "can: no chip driver is selected; define CONFIG_CAN_<CHIP>=1 (stm-forge: CAN_<CHIP> = y)"
 #endif
 
 /* Milliseconds dressed as microseconds; see can.h for a real clock. */

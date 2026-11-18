@@ -173,6 +173,17 @@ static inline esp_err_t can_esp_err(int err)
 TickType_t can_ticks(uint32_t ms);
 
 #else /* STM32 HAL */
+/*
+ * Undefined, the include below fails with only
+ * `#include expects "FILENAME" or <FILENAME>`. Every library source that
+ * needs the HAL includes this header before any chip header, so one check
+ * here names the cause on every build route. The HAL module checks sit in
+ * its #else: without the family header no module looks enabled, and each of
+ * them would blame a module instead.
+ */
+#ifndef CMSIS_device_header
+#error "can: CMSIS_device_header is not defined; define it as the STM32 family header, \"stm32f4xx.h\", \"stm32f7xx.h\", \"stm32g0xx.h\" or \"stm32h5xx.h\" (CMake: set(MCU_DEVICE_HEADER stm32f4xx.h))"
+#else
 #include CMSIS_device_header
 
 #if !defined(HAL_SPI_MODULE_ENABLED) && CONFIG_CAN_MCP2515
@@ -184,6 +195,7 @@ TickType_t can_ticks(uint32_t ms);
 #if !defined(HAL_FDCAN_MODULE_ENABLED) && CONFIG_CAN_FDCAN
 #error "CAN_FDCAN needs the HAL FDCAN module: #define HAL_FDCAN_MODULE_ENABLED in the app's stm32<family>xx_hal_conf.h, with stm32<family>xx_hal_fdcan.c in the build"
 #endif
+#endif /* CMSIS_device_header */
 
 #ifdef HAL_I2C_MODULE_ENABLED
 typedef I2C_HandleTypeDef *can_i2c_bus;
